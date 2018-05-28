@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create S3 bucket with policy which allow read access for HERE cidr
+Parameters:
+  emrJobReportingS3Bucket:
+    Type: String
+    Default: here-oneworld-dev
+    Description: The main bucket where all deployment data was uploaded.
+  emrJobRegistrationJarS3Key:
+      Type: String
+      Default: aluptak/emrJopReporter/emr-job-registration-1.0-SNAPSHOT.jar
+      Description: Key under the bucket where is jar for emrJobRegistration lambda.
+  emrJobReportingIAMRole:
+        Type: String
+        Default: "arn:aws:iam::846469392269:role/lambda_basic_execution"
+        Description: Role for lambda function in AWS.
+  emrJobMessageCollectorJarS3Key:
+        Type: String
+        Default: aluptak/emrJopReporter/emr-job-message-collector-1.0-SNAPSHOT.jar
+        Description: Key under the bucket where is jar for emrJobMessageCollector lambda.
+  emrJobStateUpdaterJarS3Key:
+        Type: String
+        Default: aluptak/emrJopReporter/emr-job-state-updater-1.0-SNAPSHOT.jar
+        Description: Key under the bucket where is jar for emrJobStateUpdater lambda.
+  s3UserHtmlReporterJarS3Key:
+          Type: String
+          Default: aluptak/emrJopReporter/s3-user-html-reporter-1.0-SNAPSHOT.jar
+          Description: Key under the bucket where is jar for emrJobStateUpdater lambda.
+  s3DevHtmlReporterJarS3Key:
+          Type: String
+          Default: aluptak/emrJopReporter/s3-dev-html-reporter-1.0-SNAPSHOT.jar
+          Description: Key under the bucket where is jar for emrJobStateUpdater lambda.
+Resources:
+  emrJobRegistration:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket:
+          Ref: emrJobReportingS3Bucket
+        S3Key:
+          Ref: emrJobRegistrationJarS3Key
+      Description: "This lambda handler is triggered with SNS and save new emr job cluster info to emr reporting database"
+      FunctionName: "emrJobRegistration"
+      Handler: "com.here.owc.EmrJobRegistration::handleRequest"
+      MemorySize: 512
+      Role:
+        Ref: emrJobReportingIAMRole
+      Runtime: "java8"
+  emrJobRegistrationSnsTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: ejrt
+      Subscription:
+      -
+        Endpoint: !GetAtt emrJobRegistration.Arn
+        Protocol: "lambda"
+      TopicName: "emrJobRegistrationTopic"
+  LambdaResourcePolicy:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        Action: "lambda:InvokeFunction"
+        FunctionName: !GetAtt emrJobRegistration.Arn
+        Principal: "sns.amazonaws.com"
+        SourceArn: !Ref emrJobRegistrationSnsTopic
+  emrJobMessageCollector:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Code:
+          S3Bucket:
+            Ref: emrJobReportingS3Bucket
+          S3Key:
+            Ref: emrJobMessageCollectorJarS3Key
+        Description: "This lambda handler will be triggered by cloudWatch scheduled event"
+        FunctionName: "emrJobMessageCollector"
+        Handler: "com.here.owc.EmrJobMessageCollector::handleRequest"
+        MemorySize: 512
+        Role:
+          Ref: emrJobReportingIAMRole
+        Runtime: "java8"
+  emrJobMessageCollectorScheduledEvent:
+      Type: "AWS::Events::Rule"
+      Properties:
+        Description: "Every desired interval lambda function emrJobMessageCollector will be triggered"
+        Name: "emrJobMessageCollectorScheduledEvent"
+        ScheduleExpression: "rate(1 minute)"
+        Targets:
+          -
+            Arn: !GetAtt emrJobMessageCollector.Arn
+            Id: "emrJobMessageCollectorScheduledEvent"
+  emrJobMessageCollectorResourcePolicy:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+          Action: "lambda:InvokeFunction"
+          FunctionName: !GetAtt emrJobMessageCollector.Arn
+          Principal: "events.amazonaws.com"
+          SourceArn: !GetAtt emrJobMessageCollectorScheduledEvent.Arn
+  emrJobStateUpdater:
+        Type: "AWS::Lambda::Function"
+        Properties:
+          Code:
+            S3Bucket:
+              Ref: emrJobReportingS3Bucket
+            S3Key:
+              Ref: emrJobStateUpdaterJarS3Key
+          Description: "This lambda handler will be triggered by cloudWatch EMR event"
+          FunctionName: "emrJobStateUpdater"
+          Handler: "com.here.owc.EmrJobStateUpdater::handleRequest"
+          MemorySize: 512
+          Role:
+            Ref: emrJobReportingIAMRole
+          Runtime: "java8"
+  emrJobStateUpdaterEvent:
+      Type: "AWS::Events::Rule"
+      Properties:
+        Description: "Every desired interval lambda function emrJobMessageCollector will be triggered"
+        EventPattern:
+          {
+            "source": [
+              "aws.emr"
+            ]
+          }
+        Name: "emrJobStateUpdaterEvent"
+        Targets:
+          -
+            Arn: !GetAtt emrJobStateUpdater.Arn
+            Id: "emrJobStateUpdaterEvent"
+  emrJobStateUpdaterResourcePolicy:
+          Type: "AWS::Lambda::Permission"
+          Properties:
+            Action: "lambda:InvokeFunction"
+            FunctionName: !GetAtt emrJobStateUpdater.Arn
+            Principal: "events.amazonaws.com"
+            SourceArn: !GetAtt emrJobStateUpdaterEvent.Arn
+  s3UserHtmlReporter:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket:
+          Ref: emrJobReportingS3Bucket
+        S3Key:
+          Ref: s3UserHtmlReporterJarS3Key
+      Description: "This lambda handler is triggered with SNS and create new html dev report contains detail messages"
+      FunctionName: "s3UserHtmlReport"
+      Handler: "com.here.owc.s3UserHtmlReporter::handleRequest"
+      MemorySize: 512
+      Role:
+        Ref: emrJobReportingIAMRole
+      Runtime: "java8"
+  s3DevHtmlReporter:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Code:
+          S3Bucket:
+            Ref: emrJobReportingS3Bucket
+          S3Key:
+            Ref: s3UserHtmlReporterJarS3Key
+        Description: "This lambda handler is triggered with SNS and create user html report for average user"
+        FunctionName: "s3DevHtmlReporter"
+        Handler: "com.here.owc.s3DevHtmlReporter::handleRequest"
+        MemorySize: 512
+        Role:
+          Ref: emrJobReportingIAMRole
+        Runtime: "java8"
+  emrJobReportSnsTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: ejr
+      Subscription:
+      -
+        Endpoint: !GetAtt s3DevHtmlReporter.Arn
+        Protocol: "lambda"
+      -
+        Endpoint: !GetAtt s3UserHtmlReporter.Arn
+        Protocol: "lambda"
+      TopicName: "emrJobReportTopic"
+  s3DevHtmlReporterResroucePolicy:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        Action: "lambda:InvokeFunction"
+        FunctionName: !GetAtt s3DevHtmlReporter.Arn
+        Principal: "sns.amazonaws.com"
+        SourceArn: !Ref emrJobReportSnsTopic
+  s3UserHtmlReporterResroucePolicy:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+          Action: "lambda:InvokeFunction"
+          FunctionName: !GetAtt s3UserHtmlReporter.Arn
+          Principal: "sns.amazonaws.com"
+          SourceArn: !Ref emrJobReportSnsTopic
